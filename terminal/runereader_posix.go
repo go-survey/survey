@@ -14,7 +14,7 @@ import (
 	"bytes"
 	"fmt"
 	"syscall"
-	"unsafe"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -23,7 +23,7 @@ const (
 )
 
 type runeReaderState struct {
-	term   syscall.Termios
+	term	unix.Termios
 	reader *bufio.Reader
 	buf    *bytes.Buffer
 }
@@ -45,19 +45,20 @@ func (rr *RuneReader) Buffer() *bytes.Buffer {
 
 // For reading runes we just want to disable echo.
 func (rr *RuneReader) SetTermMode() error {
-	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(rr.stdio.In.Fd()), ioctlReadTermios, uintptr(unsafe.Pointer(&rr.state.term)), 0, 0, 0); err != 0 {
+	termios, err := unix.IoctlGetTermios((int)(rr.stdio.In.Fd()), ioctlReadTermios)
+	if err != nil {
 		return err
 	}
 
-	newState := rr.state.term
-	newState.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG
+	rr.state.term = *termios
+	termios.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG
 	// Because we are clearing canonical mode, we need to ensure VMIN & VTIME are
 	// set to the values we expect. This combination puts things in standard
 	// "blocking read" mode (see termios(3)).
-	newState.Cc[syscall.VMIN] = 1
-	newState.Cc[syscall.VTIME] = 0
+	termios.Cc[syscall.VMIN] = 1
+	termios.Cc[syscall.VTIME] = 0
 
-	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(rr.stdio.In.Fd()), ioctlWriteTermios, uintptr(unsafe.Pointer(&newState)), 0, 0, 0); err != 0 {
+	if err = unix.IoctlSetTermios((int)(rr.stdio.In.Fd()), ioctlWriteTermios, termios); err != nil {
 		return err
 	}
 
@@ -65,7 +66,7 @@ func (rr *RuneReader) SetTermMode() error {
 }
 
 func (rr *RuneReader) RestoreTermMode() error {
-	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(rr.stdio.In.Fd()), ioctlWriteTermios, uintptr(unsafe.Pointer(&rr.state.term)), 0, 0, 0); err != 0 {
+	if err := unix.IoctlSetTermios((int)(rr.stdio.In.Fd()), ioctlWriteTermios, &rr.state.term); err != nil {
 		return err
 	}
 	return nil
